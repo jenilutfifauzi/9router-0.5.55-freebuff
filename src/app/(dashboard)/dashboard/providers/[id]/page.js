@@ -986,6 +986,32 @@ export default function ProviderDetailPage() {
                     console.log("Error updating proxy:", error);
                   }
                 }}
+                canEndSession={providerId === "freebuff"}
+                onEndSession={async () => {
+                  try {
+                    const res = await fetch(`/api/providers/${conn.id}/end-session`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      alert(`End session failed: ${data.error || res.status}`);
+                      return;
+                    }
+                    // Clear local modelLock_* fields in the UI
+                    setConnections(prev => prev.map(c => {
+                      if (c.id !== conn.id) return c;
+                      const cleared = { ...c };
+                      for (const key of Object.keys(cleared)) {
+                        if (key.startsWith("modelLock_")) cleared[key] = null;
+                      }
+                      return cleared;
+                    }));
+                  } catch (error) {
+                    console.log("Error ending session:", error);
+                    alert(`End session error: ${error.message}`);
+                  }
+                }}
                 onEdit={() => {
                   setSelectedConnection(conn);
                   setShowEditModal(true);
