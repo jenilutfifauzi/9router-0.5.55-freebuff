@@ -89,6 +89,65 @@ const END_TURN_TOOL = {
   },
 };
 
+function hardenEditToolSchemas(body) {
+  const tools = body?.tools;
+  if (!Array.isArray(tools) || tools.length === 0) return body;
+
+  let changed = false;
+  const nextTools = tools.map((tool) => {
+    const fn = tool?.function;
+    const params = fn?.parameters;
+    if (!fn || !params || typeof params !== "object") return tool;
+
+    if (fn.name === "edit") {
+      const edits = params.properties?.edits;
+      if (edits && edits.type === "array" && edits.minItems !== 1) {
+        changed = true;
+        return {
+          ...tool,
+          function: {
+            ...fn,
+            parameters: {
+              ...params,
+              properties: { ...params.properties, edits: { ...edits, minItems: 1 } },
+            },
+          },
+        };
+      }
+    }
+
+    if (fn.name !== "execute") return tool;
+    const edits = params.properties?.edits;
+    const editId = params.properties?.editId;
+    const input = params.properties?.input;
+    if (!edits || edits.type !== "array") return tool;
+
+    changed = true;
+    return {
+      ...tool,
+      function: {
+        ...fn,
+        description: `${fn.description || ""} Use exactly one valid mode: either input with a non-empty snippet, or editId plus at least one edits item. Never send edits as an empty array or editId as an empty string.`.trim(),
+        parameters: {
+          ...params,
+          properties: {
+            ...params.properties,
+            edits: { ...edits, minItems: 1 },
+            editId: { ...editId, minLength: 1 },
+            input: { ...input, minLength: 1 },
+          },
+          anyOf: [
+            { required: ["input"] },
+            { required: ["editId", "edits"] },
+          ],
+        },
+      },
+    };
+  });
+
+  return changed ? { ...body, tools: nextTools } : body;
+}
+
 function injectEndTurnTool(body) {
   const tools = body?.tools;
   if (!Array.isArray(tools) || tools.length === 0) return body;
@@ -491,6 +550,8 @@ export class FreebuffExecutor extends BaseExecutor {
     delete body.reasoning;
     // Free-tier gate: first system message must open with the CLI marker.
     body = injectFreebuffMarker(body);
+    // Reject malformed empty edit/execute calls before the model sees the schema.
+    body = hardenEditToolSchemas(body);
     // Foreign-toolset gate: tool-calling requests must declare `end_turn`.
     return injectEndTurnTool(body);
   }
