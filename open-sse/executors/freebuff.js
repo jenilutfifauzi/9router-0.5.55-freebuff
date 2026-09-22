@@ -30,7 +30,8 @@ import { markPoolUnfit, clearPoolUnfit } from "../services/proxyPoolFitness.js";
  * what goes in codebuff_metadata.run_id. The free tier additionally gates on a
  * session: POST /api/v1/freebuff/session with an `x-freebuff-model` header
  * claims a row (bound to one model, ~1h); its instance id must ride along as
- * codebuff_metadata.freebuff_instance_id.
+ * codebuff_metadata.freebuff_instance_id. Ending that row needs the same id in
+ * the `x-freebuff-instance-id` header (see endSession).
  */
 const SESSION_PATH = "/api/v1/freebuff/session";
 const RUN_PATH = "/api/v1/agent-runs";
@@ -409,6 +410,62 @@ async function ensureSession(token, model, proxyOptions, force = false) {
   return inflight.get(key);
 }
 
+// Force-end the account's active session. The backend now requires the
+// session's own instance id on DELETE (without it: 400 `instance_required` —
+// "Ending a session requires its instance id"), and only
+// GET /freebuff/session publishes that id, so read the row first and echo it
+// back as `x-freebuff-instance-id`. Same order the CLI uses when it ends a
+// session it did not create (GET → releaseSlot(instanceId)).
+const FREE_INSTANCE_HEADER = "x-freebuff-instance-id";
+const FREE_CLI_USER_AGENT = "codebuff-cli/0.0.183";
+
+// Drop cached session rows for one account — after an explicit end the cached
+// instance id is dead, so the next chat must re-claim instead of replaying it.
+export function clearSessionCacheForToken(token) {
+  for (const key of sessionCache.keys()) {
+    if (key.startsWith(`${token}::`)) sessionCache.delete(key);
+  }
+}
+
+export async function endSession(token, proxyOptions = null) {
+  const sessionUrl = `${sessionOrigin()}${SESSION_PATH}`;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "User-Agent": FREE_CLI_USER_AGENT,
+    Accept: "application/json",
+  };
+
+  const read = await fetchWithNetworkRetry(sessionUrl, { method: "GET", headers }, proxyOptions);
+  const session = await read.json().catch(() => ({}));
+  if (!read.ok) {
+    const err = new Error(`Freebuff session lookup failed: ${read.status} ${JSON.stringify(session).slice(0, 200)}`);
+    err.status = read.status;
+    throw err;
+  }
+  if (session?.status !== "active" || !session.instanceId) {
+    clearSessionCacheForToken(token);
+    return { ended: false, status: session?.status || "none", currentModel: session?.model || null };
+  }
+
+  const response = await fetchWithNetworkRetry(sessionUrl, {
+    method: "DELETE",
+    headers: { ...headers, [FREE_INSTANCE_HEADER]: session.instanceId },
+  }, proxyOptions);
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(`Freebuff end-session failed: ${response.status} ${JSON.stringify(result).slice(0, 200)}`);
+    err.status = response.status;
+    throw err;
+  }
+
+  clearSessionCacheForToken(token);
+  return {
+    ended: result.status === "ended",
+    status: result.status || "ended",
+    refundPending: Boolean(result.freebucksRefundPending),
+  };
+}
+
 // Register an agent run so the chat backend can resolve the run_id we send.
 async function startRun(token, model, proxyOptions) {
   const response = await fetchWithNetworkRetry(`${sessionOrigin()}${RUN_PATH}`, {
@@ -755,6 +812,7 @@ export class FreebuffExecutor extends BaseExecutor {
 export const __test__ = {
   ensureSession,
   requestSession,
+  endSession,
   startRun,
   resetSessionCache,
   rootAgentIdForModel,
