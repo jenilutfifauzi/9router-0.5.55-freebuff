@@ -34,7 +34,7 @@ export default {
     website: "https://freebuff.com",
     notice: {
       signupUrl: "https://freebuff.com",
-      text: "Free ad-supported coding agent by Codebuff. Sign in with your Freebuff/Codebuff account via browser login. Free tier is ad-supported and limited in some regions (limited mode: 6 x 1-hour sessions/day); full mode runs in select countries. ⚠️ One account has ONE active session locked to ONE model — requesting a different model while a session is active returns 'model_locked' (409); use a separate account per model, or wait for the session to expire.",
+      text: "Free ad-supported coding agent by Codebuff. Sign in with your Freebuff/Codebuff account via browser login. Sessions are paid with Freebucks — one shared daily pool per account (25/day, resets ~14:00 WIB) and each model costs Freebucks per hour (GLM 5.3 Flash / Kimi K3 Eco 5, MiMo 2.5 / Solar Pro4 10, DeepSeek V4 Flash 15, Muse Spark 15, GPT-5.6 Luna 20). A session is locked to ONE model for its hour, and an account recently used from a region without full access stays on the limited tier for a while — Luna and the premium models need the full tier.",
     },
   },
   category: "free",
@@ -52,9 +52,9 @@ export default {
       503: { attempts: 2, delayMs: 1500 },
     },
     // Session endpoint doubles as the quota API: GET /api/v1/freebuff/session
-    // returns the shared daily session quota (rateLimitsByModel) without
-    // claiming anything — POST would burn a session, so quota reads are GET
-    // only (see services/usage/freebuff.js).
+    // returns the Freebucks pool (balance / daily limit-spent / resetAt) plus
+    // the per-model hourly prices without claiming anything — POST would spend
+    // Freebucks, so quota reads are GET only (see services/usage/freebuff.js).
     usage: {
       url: "https://www.codebuff.com/api/v1/freebuff/session",
     },
@@ -69,12 +69,15 @@ export default {
     { id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash" },
     { id: "deepseek/deepseek-v4-pro", name: "DeepSeek V4 Pro" },
     { id: "mimo/mimo-v2.5", name: "MiMo 2.5" },
+    { id: "mimo/mimo-v2.6-pro", name: "MiMo 2.6 Pro" },
     { id: "minimax/minimax-m3", name: "MiniMax M3" },
     { id: "openai/gpt-5.6-luna", name: "GPT-5.6 Luna" },
     { id: "openai/gpt-5.6-luna-es", name: "GPT-5.6 Luna ES" },
     { id: "upstage/solar-pro4", name: "Upstage Solar Pro 4" },
     { id: "crof/kimi-k3-eco", name: "Kimi K3 Eco" },
     { id: "meta/muse-spark-1.2-contributor", name: "Muse Spark 1.2 Contributor" },
+    { id: "meta/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
+    { id: "google/gemini-3.8-flash", name: "Gemini 3.8 Flash" },
     { id: "z-ai/glm-5.3-flash", name: "GLM 5.3 Flash" },
   ],
   // Login-flow host — the CLI in freebuff mode logs in via freebuff.com, and

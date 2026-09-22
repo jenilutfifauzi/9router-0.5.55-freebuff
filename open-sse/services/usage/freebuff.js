@@ -1,24 +1,34 @@
 /**
  * Freebuff usage handler
  *
- * Freebuff has no separate billing/quota API — the daily free/premium session
- * quota lives on the session endpoint itself. Reading it MUST use
- * GET /api/v1/freebuff/session (the CLI's status poll): POST would CLAIM a
- * session and burn 1.0 unit of the daily quota, which a quota tracker must
- * never do.
+ * Freebuff has no separate billing/quota API — the quota lives on the session
+ * endpoint itself. Reading it MUST use GET /api/v1/freebuff/session (the CLI's
+ * status poll): POST would CLAIM a session and spend Freebucks, which a quota
+ * tracker must never do.
  *
- * The GET response carries the shared session quota as `rateLimitsByModel`,
- * keyed by model id, on the pre-join (`none`), `active`, and `ended` states:
- *   { limit, recentCount, resetAt, period: 'pacific_day'|'pacific_week',
- *     resetTimeZone, entitlementBreakdown? }
- * `recentCount` is fractional — a long agent run can consume 1.3 units — and
- * includes the active session's own 1.0-unit reservation. `limit` can be
- * raised by referral/streak rewards (entitlementBreakdown.base + referral +
- * streak).
+ * Current shape (Freebucks, since 2026-09) — one shared daily pool per account,
+ * priced per model per hour:
+ *   freebucks: {
+ *     balance,                                  // Freebucks left today
+ *     daily: { limit, spent, remaining, resetAt, resetTimeZone },
+ *     wallet: { balance, monthlyBonus },        // paid top-up (0 = not used)
+ *     planId, prices: { [modelId]: perHour },
+ *     priceNotices, offPeak, priceChanges,
+ *   }
+ * A model the account's tier does not serve comes back as
+ * `accessTier: "limited"` + `countryBlockReason` instead of an error, so
+ * tier/country belongs in the quota story, not a separate API.
+ *
+ * Older servers sent `rateLimitsByModel` ({ limit, recentCount, resetAt } per
+ * model, daily/weekly Pacific allowance) — that parser is kept as a fallback.
  */
 
 import REGISTRY from "../../providers/registry/index.js";
 import { U, fetchWithTimeout } from "./shared.js";
+
+// The Freebucks block only comes back to a current CLI; 0.0.138 is what the
+// pre-Freebucks client sent.
+const FREEBUFF_CLI_USER_AGENT = "codebuff-cli/0.0.183";
 
 // Friendly labels from the registry model list (mirrors the CLI picker).
 const freebuffRegistry = REGISTRY.find((r) => r.id === "freebuff") || {};
@@ -28,6 +38,56 @@ const MODEL_LABELS = Object.fromEntries(
 
 function sessionUrl() {
   return U("freebuff").url;
+}
+
+/**
+ * Freebucks pool → one quota row (spent / daily limit) labelled with the
+ * remaining balance: the budget is shared by every model, and each model's
+ * hourly price decides what that balance buys.
+ */
+function freebucksQuotas(freebucks) {
+  const daily = freebucks?.daily || {};
+  const total = Number(daily.limit);
+  if (!Number.isFinite(total) || total <= 0) return null;
+
+  const spent = Number(daily.spent);
+  const balance = Number(freebucks?.balance);
+  const name = Number.isFinite(balance) ? `Freebucks (sisa ${balance})` : "Freebucks";
+
+  return {
+    [name]: {
+      used: Number.isFinite(spent) ? spent : 0,
+      total,
+      resetAt: daily.resetAt || null,
+      // Daily pool replenishes at resetAt → UI says "resets in".
+      recurring: true,
+      unlimited: false,
+    },
+  };
+}
+
+/** Pre-Freebucks rows (rateLimitsByModel + the active session's own row). */
+function legacyQuotas(data) {
+  const rateLimits = { ...(data.rateLimitsByModel || {}) };
+  if (data.status === "active" && data.rateLimit && !rateLimits[data.model]) {
+    rateLimits[data.model] = data.rateLimit;
+  }
+
+  const quotas = {};
+  for (const [model, rl] of Object.entries(rateLimits)) {
+    if (!rl || typeof rl !== "object") continue;
+    const used = Number(rl.recentCount);
+    const total = Number(rl.limit);
+    quotas[model] = {
+      used: Number.isFinite(used) ? used : 0,
+      total: Number.isFinite(total) ? total : 0,
+      resetAt: rl.resetAt || null,
+      unlimited: false,
+      recurring: true,
+      ...(MODEL_LABELS[model] ? { displayName: MODEL_LABELS[model] } : {}),
+    };
+  }
+  return quotas;
 }
 
 export async function getFreebuffUsage(accessToken, providerSpecificData, proxyOptions = null) {
@@ -42,7 +102,7 @@ export async function getFreebuffUsage(accessToken, providerSpecificData, proxyO
         method: "GET",
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          "User-Agent": "codebuff-cli/0.0.138",
+          "User-Agent": FREEBUFF_CLI_USER_AGENT,
           Accept: "application/json",
         },
       },
@@ -78,29 +138,7 @@ export async function getFreebuffUsage(accessToken, providerSpecificData, proxyO
     }
 
     const data = await response.json().catch(() => ({}));
-    const rateLimits = { ...(data.rateLimitsByModel || {}) };
-    // An active session carries its own `rateLimit` row — fold it in when the
-    // shared map omits the model (older servers).
-    if (data.status === "active" && data.rateLimit && !rateLimits[data.model]) {
-      rateLimits[data.model] = data.rateLimit;
-    }
-
-    const quotas = {};
-    for (const [model, rl] of Object.entries(rateLimits)) {
-      if (!rl || typeof rl !== "object") continue;
-      const used = Number(rl.recentCount);
-      const total = Number(rl.limit);
-      quotas[model] = {
-        used: Number.isFinite(used) ? used : 0,
-        total: Number.isFinite(total) ? total : 0,
-        resetAt: rl.resetAt || null,
-        unlimited: false,
-        // Daily/weekly Pacific session allowance replenishes at resetAt — the
-        // UI must say "Resets in", not "Expires in".
-        recurring: true,
-        ...(MODEL_LABELS[model] ? { displayName: MODEL_LABELS[model] } : {}),
-      };
-    }
+    const quotas = freebucksQuotas(data.freebucks) || legacyQuotas(data);
 
     const plan = data.accessTier === "limited" ? "Freebuff (Limited)" : "Freebuff";
     if (Object.keys(quotas).length === 0) {

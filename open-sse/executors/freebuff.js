@@ -167,12 +167,15 @@ const FREE_ROOT_AGENT_BY_MODEL = {
   "deepseek/deepseek-v4-flash": "base3-free-deepseek-flash",
   "deepseek/deepseek-v4-pro": "base3-free-deepseek",
   "mimo/mimo-v2.5": "base3-free-mimo",
+  "mimo/mimo-v2.6-pro": "base3-free-mimo-2-6-pro",
   "minimax/minimax-m3": "base3-free-minimax-m3",
   "openai/gpt-5.6-luna": "base3-free-luna",
   "openai/gpt-5.6-luna-es": "base3-free-luna-es",
   "upstage/solar-pro4": "base3-free-solar-pro4",
   "crof/kimi-k3-eco": "base3-free-kimi-k3-eco",
   "meta/muse-spark-1.2-contributor": "base3-free-muse-spark",
+  "meta/muse-spark-1.3-contributor": "base3-free-muse-spark-1-3",
+  "google/gemini-3.8-flash": "base3-free-gemini-3-8-flash",
   "z-ai/glm-5.3-flash": "base3-free-glm-5-3-flash",
 };
 
